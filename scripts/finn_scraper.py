@@ -51,8 +51,11 @@ class Traversals:
 class SpotifyClient:
     def __init__(self, web=None):
         self.client: Spotify = Spotify(client_credentials_manager=SpotifyClientCredentials(client_id=os.environ["SPOTIFY_CLIENT_ID"], client_secret=os.environ["SPOTIFY_CLIENT_SECRET"]))
-        self.web = {}
+        self.new_output = {}
         with open("public/data/new_output.json", "r") as infile:
+            self.new_output = json.load(infile)
+        self.web = {}
+        with open("public/data/web.json", "r") as infile:
             self.web = json.load(infile)
 
     def getAlbumTracks(self, album_id):
@@ -83,12 +86,18 @@ class SpotifyClient:
     def getPopularArtists(self):
         valid_chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
         artists = {}
-        for character in valid_chars:
-            artists = self.searchNewArtists(artists, character)
-            for character_2 in valid_chars:
-                artists = self.searchNewArtists(artists, character+character_2)
-                artists = self.searchNewArtists(artists, character+character_2, offset=50)
-        return artists
+        try:
+            for character in valid_chars:
+                artists = self.searchNewArtists(artists, character)
+                for character_2 in valid_chars:
+                    artists = self.searchNewArtists(artists, character+character_2)
+                    artists = self.searchNewArtists(artists, character+character_2, offset=50)
+        except Exception as e:
+            print(e)
+            print("left off at charac")
+        finally:
+            self.writeOutputToFile("public/data/new_output.json", artists)
+
 
     def searchNewArtists(self, artists, query, popularity_threshold=50, limit=50, offset=0):
         time.sleep(1)
@@ -97,14 +106,13 @@ class SpotifyClient:
             if artist_information["name"] in artists or int(artist_information["popularity"]) < popularity_threshold:
                 continue
             print(f'{artist_information["name"]} - {artist_information["popularity"]}')
-            artists[artist_information["name"]] = {"id": artist_information["id"], "name": artist_information["name"], "popularity": artist_information["popularity"], "image": artist_information["images"][0]["url"]}
+            artists[artist_information["name"]] = {"id": artist_information["id"], "name": artist_information["name"], "popularity": artist_information["popularity"], "image": artist_information["images"][0]["url"] if len(artist_information["images"]) else ""}
         return artists
     
     def getArtistInformation(self, artist_id):
         time.sleep(1)
         artistTopTracksInformation = self.client.artist_top_tracks(artist_id)
         topTrack = artistTopTracksInformation["tracks"][0]
-        time.sleep(1)
         relatedArtists = self.client.artist_related_artists(artist_id)
         return {
             "related": [artist["name"] for artist in relatedArtists["artists"] if artist["name"] in self.web],
@@ -114,26 +122,40 @@ class SpotifyClient:
             "top_song_art": "https://i.scdn.co/image/ab67616d0000b273357a322c96a9c629de19ed1e"
         }
     
-    def updateWithArtistInformation(self, artists):
-        for artist, artist_information in artists.items():
-            new_artist_information = self.getArtistInformation(artist_information["id"])
-            for key, value in new_artist_information.items():
-                self.web[artist][key] = value
-        return artists
-            
+    def updateWithArtistInformation(self, offset=0):
+        artists = self.readInFileContents("public/data/new_output.json")
+        index = 0
+        try: # take each artist ID and get other important information to add to the json file.
+            for artist, artist_information in list(artists.items()[offset:]):
+                new_artist_information = self.getArtistInformation(artist_information["id"])
+                for key, value in new_artist_information.items():
+                    artists[artist][key] = value
+                if index % 100 == 0:
+                    self.writeOutputToFile("public/data/new_output.json", artists)
+                index += 1
+        except Exception as e: # catch any errors and print out the index it broke at so we can restart it from there.
+            print(e)
+            print(f"Left off on index {index}")
+        finally: # write the output to the file, regardless if it breaks
+            self.writeOutputToFile("public/data/new_output.json", artists)
 
-    def writeOutputToFile(self):
-        artists = self.getPopularArtists()
-        updated_artists = self.updateWithArtistInformation(artists)
-        updated_artists_with_connected = self.getConnectedArtists(updated_artists)
-        with open("public/data/new_output.json", "w") as outfile:
-            json.dump(updated_artists_with_connected, outfile)
-        for existing_artist in self.web:
-            if not existing_artist in artists:
-                print(existing_artist)
+    def readInFileContents(self, file):
+        with open(file, "r") as infile:
+            artists = json.load(infile)
+        return artists
+
+    def writeOutputToFile(self, file, data):
+        with open(file, "w") as outfile:
+            json.dump(data, outfile)
+
+    def scrapeAll(self):
+        self.getPopularArtists()
+        # self.updateWithArtistInformation()
+        # self.getConnectedArtists()
+
 
 def main():
     spotifyClient = SpotifyClient()
-    spotifyClient.writeOutputToFile()
+    spotifyClient.scrapeAll()
 
 main()
